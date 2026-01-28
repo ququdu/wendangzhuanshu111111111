@@ -1,0 +1,31 @@
+{
+  "name": "@doc2book/generator",
+  "version": "0.1.0",
+  "description": "书籍生成模块 - 生成符合 KDP 标准的 EPUB/PDF",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "test": "vitest",
+    "lint": "eslint src --ext .ts"
+  },
+  "dependencies": {
+    "@doc2book/shared": "workspace:*",
+    "epub-gen-memory": "^1.0.10",
+    "pdfkit": "^0.14.0",
+    "uuid": "^9.0.1",
+    "archiver": "^6.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/uuid": "^9.0.7",
+    "@types/pdfkit": "^0.13.3",
+    "@types/archiver": "^6.0.2",
+    "typescript": "^5.3.3",
+    "vitest": "^1.2.0"
+  },
+  "peerDependencies": {
+    "@doc2book/shared": "workspace:*"
+  }
+}

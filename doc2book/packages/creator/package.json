@@ -1,0 +1,13 @@
+{
+  "name": "@doc2book/creator",
+  "version": "0.1.0",
+  "description": "原创内容生成模块 - 基于知识生成原创内容",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": { "build": "tsc", "dev": "tsc --watch", "test": "vitest" },
+  "dependencies": {
+    "@doc2book/shared": "workspace:*",
+    "@doc2book/providers": "workspace:*"
+  },
+  "devDependencies": { "@types/node": "^20.11.0", "typescript": "^5.3.3", "vitest": "^1.2.0" }
+}

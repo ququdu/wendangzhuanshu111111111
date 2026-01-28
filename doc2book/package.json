@@ -1,0 +1,29 @@
+{
+  "name": "doc2book",
+  "version": "1.0.0",
+  "description": "文档转商业书籍系统 - 理解、综合、原创重写",
+  "private": true,
+  "scripts": {
+    "dev": "turbo dev",
+    "build": "turbo build",
+    "lint": "turbo lint",
+    "test": "turbo test",
+    "clean": "turbo clean && rm -rf node_modules"
+  },
+  "keywords": [
+    "book-generation",
+    "document-processing",
+    "localization",
+    "ai-writing"
+  ],
+  "author": "",
+  "license": "MIT",
+  "packageManager": "pnpm@10.28.0",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "devDependencies": {
+    "turbo": "^2.0.0",
+    "typescript": "^5.4.0"
+  }
+}
