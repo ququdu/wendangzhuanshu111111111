@@ -264,24 +264,35 @@ export default function LogsPage() {
             <CardTitle className="text-lg">模块状态</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="flex flex-wrap gap-2">
+            <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
               {Object.entries(status.modules).map(([module, info]) => (
-                <Badge
+                <div
                   key={module}
-                  variant={info.status === "error" ? "destructive" : "default"}
-                  className="cursor-pointer px-3 py-1"
+                  className="border rounded-md p-3 space-y-2 cursor-pointer"
                   onClick={() =>
                     setSelectedModule(selectedModule === module ? null : module)
                   }
                 >
-                  {info.status === "error" ? (
-                    <AlertCircle className="h-3 w-3 mr-1" />
-                  ) : (
-                    <CheckCircle className="h-3 w-3 mr-1" />
-                  )}
-                  {module}
-                  {selectedModule === module && " ✓"}
-                </Badge>
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2 text-sm font-medium">
+                      {getModuleIcon(module)}
+                      {module}
+                    </div>
+                    <Badge variant={info.status === "error" ? "destructive" : "default"}>
+                      {info.status === "error" ? "异常" : info.status}
+                      {selectedModule === module && " ✓"}
+                    </Badge>
+                  </div>
+                  <div className="text-xs text-muted-foreground">
+                    最近级别：{info.last_level || "未知"}
+                  </div>
+                  <div className="text-xs">
+                    最近消息：{info.last_message || "暂无"}
+                  </div>
+                  <div className="text-xs text-muted-foreground">
+                    最近活动：{info.last_activity ? new Date(info.last_activity).toLocaleString("zh-CN") : "未知"}
+                  </div>
+                </div>
               ))}
             </div>
           </CardContent>

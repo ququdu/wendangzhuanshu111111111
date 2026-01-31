@@ -83,7 +83,8 @@ ${this.truncateText(text, 5000)}
 要求：
 - 简洁明了
 - 抓住核心
-- ${options?.language ? `使用${options.language}` : '使用原文语言'}`
+- ${options?.language ? `使用${options.language}` : '使用原文语言'}
+${options?.instruction ? `\n附加要求：\n${options.instruction}` : ''}`
 
     const response = await this.providerManager.complete(
       [{ role: 'user', content: prompt }],
@@ -114,7 +115,8 @@ ${this.truncateText(text, 8000)}
 - 涵盖主要内容
 - 逻辑清晰
 - 语言流畅
-- ${options?.language ? `使用${options.language}` : '使用原文语言'}`
+- ${options?.language ? `使用${options.language}` : '使用原文语言'}
+${options?.instruction ? `\n附加要求：\n${options.instruction}` : ''}`
 
     const response = await this.providerManager.complete(
       [{ role: 'user', content: prompt }],
@@ -144,7 +146,8 @@ ${this.truncateText(text, 10000)}
 - 涵盖所有重要内容
 - 保持逻辑结构
 - 包含关键细节
-- ${options?.language ? `使用${options.language}` : '使用原文语言'}`
+- ${options?.language ? `使用${options.language}` : '使用原文语言'}
+${options?.instruction ? `\n附加要求：\n${options.instruction}` : ''}`
 
     const response = await this.providerManager.complete(
       [{ role: 'user', content: prompt }],
@@ -176,7 +179,8 @@ ${this.truncateText(text, 8000)}
 - 以"- "开头
 - 简洁明了
 - 抓住关键信息
-- ${options?.language ? `使用${options.language}` : '使用原文语言'}`
+- ${options?.language ? `使用${options.language}` : '使用原文语言'}
+${options?.instruction ? `\n附加要求：\n${options.instruction}` : ''}`
 
     const response = await this.providerManager.complete(
       [{ role: 'user', content: prompt }],

@@ -146,6 +146,10 @@ ${truncatedText}
 
     prompt += `\n请以 JSON 格式返回分析结果。`
 
+    if (options?.instruction) {
+      prompt += `\n\n附加要求：\n${options.instruction}`
+    }
+
     return prompt
   }
 

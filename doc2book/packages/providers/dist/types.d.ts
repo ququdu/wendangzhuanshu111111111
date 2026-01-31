@@ -67,6 +67,10 @@ export interface TranslationOptions {
     glossary?: Record<string, string>;
     /** 正式程度 */
     formality?: 'default' | 'more' | 'less' | 'prefer_more' | 'prefer_less';
+    /** 额外指令（AI 翻译使用） */
+    instruction?: string;
+    /** 自定义系统提示（AI 翻译使用） */
+    systemPrompt?: string;
 }
 /**
  * 翻译结果

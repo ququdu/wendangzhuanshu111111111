@@ -152,14 +152,13 @@ async def replace_entities(text: str, entities: list, replacements: Optional[dic
         }
 
 
-async def rewrite_content(content: str, style: str = "book", language: str = "zh") -> dict:
+async def rewrite_content(content: str, options: Optional[dict] = None) -> dict:
     """
     调用 AI 重写内容
 
     Args:
         content: 要重写的内容
-        style: 重写风格 (book, article, academic)
-        language: 目标语言
+        options: 重写选项（风格、读者、复杂度、提示词等）
 
     Returns:
         重写结果，包含 success, rewritten 或 error
@@ -172,8 +171,7 @@ async def rewrite_content(content: str, style: str = "book", language: str = "zh
                 f"{PROCESSOR_URL}/rewrite",
                 json={
                     "content": content,
-                    "style": style,
-                    "language": language
+                    "options": options or {}
                 }
             )
             return response.json()
@@ -293,6 +291,26 @@ async def update_provider_config(config: dict) -> dict:
         }
 
 
+async def get_provider_status() -> dict:
+    """
+    获取 Provider 状态
+    """
+    try:
+        async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+            response = await client.get(f"{PROCESSOR_URL}/providers/status")
+            return response.json()
+    except httpx.ConnectError:
+        return {
+            "success": False,
+            "error": "处理服务未启动"
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": f"获取状态失败: {str(e)}"
+        }
+
+
 async def test_provider_connection(config: dict) -> dict:
     """
     测试 Provider 连接
@@ -328,14 +346,13 @@ async def test_provider_connection(config: dict) -> dict:
         }
 
 
-async def generate_book(chapters: list, metadata: dict, output_format: str = "epub") -> dict:
+async def generate_book(book: dict, options: dict) -> dict:
     """
     生成书籍文件
 
     Args:
-        chapters: 章节列表
-        metadata: 书籍元数据
-        output_format: 输出格式 (epub, pdf)
+        book: 书籍结构数据
+        options: 生成选项 (format, outputDir, filename, validateKdp)
 
     Returns:
         生成结果
@@ -346,9 +363,8 @@ async def generate_book(chapters: list, metadata: dict, output_format: str = "ep
             response = await client.post(
                 f"{PROCESSOR_URL}/generate",
                 json={
-                    "chapters": chapters,
-                    "metadata": metadata,
-                    "format": output_format
+                    "book": book,
+                    "options": options
                 }
             )
             return response.json()
@@ -364,7 +380,7 @@ async def generate_book(chapters: list, metadata: dict, output_format: str = "ep
         }
 
 
-async def deep_analyze(content: str, options: Optional[dict] = None) -> dict:
+async def deep_analyze(ast: dict, options: Optional[dict] = None) -> dict:
     """
     深度内容分析（需要 AI）
 
@@ -381,7 +397,7 @@ async def deep_analyze(content: str, options: Optional[dict] = None) -> dict:
             response = await client.post(
                 f"{PROCESSOR_URL}/analyze/deep",
                 json={
-                    "content": content,
+                    "ast": ast,
                     "options": options or {}
                 }
             )
@@ -398,7 +414,7 @@ async def deep_analyze(content: str, options: Optional[dict] = None) -> dict:
         }
 
 
-async def summarize_content(content: str, summary_type: str = "standard") -> dict:
+async def summarize_content(ast: dict, options: Optional[dict] = None) -> dict:
     """
     生成内容摘要
 
@@ -415,8 +431,8 @@ async def summarize_content(content: str, summary_type: str = "standard") -> dic
             response = await client.post(
                 f"{PROCESSOR_URL}/summarize",
                 json={
-                    "content": content,
-                    "type": summary_type
+                    "ast": ast,
+                    "options": options or {}
                 }
             )
             return response.json()
@@ -429,4 +445,72 @@ async def summarize_content(content: str, summary_type: str = "standard") -> dic
         return {
             "success": False,
             "error": f"生成摘要失败: {str(e)}"
+        }
+
+
+async def sanitize_ast(ast: dict, options: Optional[dict] = None) -> dict:
+    """
+    内容清洗（调用 Sanitizer 核心包）
+
+    Args:
+        ast: 解析后的 AST
+        options: 清洗选项
+
+    Returns:
+        清洗结果
+    """
+    try:
+        timeout = httpx.Timeout(120.0, connect=10.0)
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.post(
+                f"{PROCESSOR_URL}/sanitize",
+                json={
+                    "ast": ast,
+                    "options": options or {}
+                }
+            )
+            return response.json()
+    except httpx.ConnectError:
+        return {
+            "success": False,
+            "error": "处理服务未启动"
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": f"清洗失败: {str(e)}"
+        }
+
+
+async def structure_content(ast: dict, options: Optional[dict] = None) -> dict:
+    """
+    结构化处理（调用 ChapterSplitter）
+
+    Args:
+        ast: 解析后的 AST
+        options: 结构化选项
+
+    Returns:
+        结构化结果
+    """
+    try:
+        timeout = httpx.Timeout(120.0, connect=10.0)
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.post(
+                f"{PROCESSOR_URL}/structure",
+                json={
+                    "ast": ast,
+                    "options": options or {}
+                }
+            )
+            return response.json()
+    except httpx.ConnectError:
+        return {
+            "success": False,
+            "error": "处理服务未启动"
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": f"结构化失败: {str(e)}"
         }

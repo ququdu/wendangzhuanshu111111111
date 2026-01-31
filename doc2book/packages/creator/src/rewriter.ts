@@ -27,7 +27,8 @@ ${content.substring(0, 8000)}
 - 目标读者：${options?.audience || 'general'}
 - 复杂度：${options?.complexity || 'moderate'}
 - 不要添加新信息
-- 不要遗漏重要内容`
+- 不要遗漏重要内容
+${options?.instruction ? `\n附加要求：\n${options.instruction}` : ''}`
 
       const response = await this.providerManager.complete(
         [{ role: 'user', content: prompt }],

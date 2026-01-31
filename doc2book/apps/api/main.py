@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 
-from routers import projects, documents, tasks, export, drafts, translations, logs
+from routers import projects, documents, tasks, export, drafts, translations, logs, skills, providers
 from services.database import init_db, SessionLocal
 from services.logger import log_info, log_error, log_sync
 from models import Task, TaskStatus
@@ -90,6 +90,8 @@ app.include_router(export.router, prefix="/api/export", tags=["export"])
 app.include_router(drafts.router, prefix="/api/drafts", tags=["drafts"])
 app.include_router(translations.router, prefix="/api/translations", tags=["translations"])
 app.include_router(logs.router, prefix="/api/logs", tags=["logs"])
+app.include_router(skills.router, prefix="/api/skills", tags=["skills"])
+app.include_router(providers.router, prefix="/api/providers", tags=["providers"])
 
 
 @app.get("/")

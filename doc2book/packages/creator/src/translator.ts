@@ -12,24 +12,41 @@ export class Translator {
     this.providerManager = providerManager
   }
 
-  async translate(content: string, targetLanguage: string, options?: { providerId?: string; sourceLanguage?: string }): Promise<TranslateResult> {
+  async translate(
+    content: string,
+    targetLanguage: string,
+    options?: {
+      providerId?: string
+      sourceLanguage?: string
+      instruction?: string
+      mode?: 'auto' | 'ai' | 'deepl'
+    }
+  ): Promise<TranslateResult> {
     const startTime = Date.now()
 
     try {
-      // 优先使用 DeepL
-      const deeplResult = await this.providerManager.translate(content, {
-        targetLanguage,
-        sourceLanguage: options?.sourceLanguage,
-        preserveFormatting: true,
-      })
+      const preferAI = options?.mode === 'ai' || Boolean(options?.instruction)
 
-      if (deeplResult.success && deeplResult.translatedText) {
-        return {
-          success: true,
-          translatedContent: deeplResult.translatedText,
-          sourceLanguage: deeplResult.detectedSourceLanguage || options?.sourceLanguage,
+      if (!preferAI) {
+        // 优先使用 DeepL
+        const deeplResult = await this.providerManager.translate(content, {
           targetLanguage,
-          translateTime: Date.now() - startTime,
+          sourceLanguage: options?.sourceLanguage,
+          preserveFormatting: true,
+        })
+
+        if (deeplResult.success && deeplResult.translatedText) {
+          return {
+            success: true,
+            translatedContent: deeplResult.translatedText,
+            sourceLanguage: deeplResult.detectedSourceLanguage || options?.sourceLanguage,
+            targetLanguage,
+            translateTime: Date.now() - startTime,
+          }
+        }
+
+        if (options?.mode === 'deepl') {
+          return { success: false, error: 'DeepL 翻译失败', translateTime: Date.now() - startTime }
         }
       }
 
@@ -38,6 +55,7 @@ export class Translator {
         targetLanguage,
         sourceLanguage: options?.sourceLanguage,
         providerId: options?.providerId,
+        instruction: options?.instruction,
       })
 
       if (aiResult.success && aiResult.translatedText) {

@@ -9,5 +9,7 @@ export declare class Translator {
     translate(content: string, targetLanguage: string, options?: {
         providerId?: string;
         sourceLanguage?: string;
+        instruction?: string;
+        mode?: 'auto' | 'ai' | 'deepl';
     }): Promise<TranslateResult>;
 }

@@ -118,7 +118,8 @@ ${text.substring(0, 5000)}
 
 每个实体包含：type, text, confidence(0-1)
 
-只返回 JSON 数组。`
+只返回 JSON 数组。
+${options.instruction ? `\n附加要求：\n${options.instruction}` : ''}`
 
     const response = await this.providerManager.complete(
       [{ role: 'user', content: prompt }],

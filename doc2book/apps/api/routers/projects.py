@@ -24,6 +24,7 @@ class ProjectCreate(BaseModel):
     target_languages: List[str] = ["zh"]
     output_formats: List[str] = ["epub"]
     kdp_compliant: bool = True
+    processing_mode: str = "ai-enhanced"
 
 
 class ProjectUpdate(BaseModel):
@@ -35,6 +36,7 @@ class ProjectUpdate(BaseModel):
     output_formats: Optional[List[str]] = None
     kdp_compliant: Optional[bool] = None
     current_stage: Optional[str] = None
+    processing_mode: Optional[str] = None
 
 
 @router.get("")
@@ -65,6 +67,7 @@ async def create_project(project: ProjectCreate, db: AsyncSession = Depends(get_
             "target_languages": project.target_languages,
             "output_formats": project.output_formats,
             "kdp_compliant": project.kdp_compliant,
+            "processing_mode": project.processing_mode,
         }
     )
 
@@ -117,6 +120,8 @@ async def update_project(project_id: str, project_update: ProjectUpdate, db: Asy
         settings["output_formats"] = project_update.output_formats
     if project_update.kdp_compliant is not None:
         settings["kdp_compliant"] = project_update.kdp_compliant
+    if project_update.processing_mode is not None:
+        settings["processing_mode"] = project_update.processing_mode
     project.settings = settings
 
     project.updated_at = datetime.utcnow()

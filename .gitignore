@@ -1,8 +1,62 @@
+# 系统文件
 nul
 doc2book/apps/api/nul
+.DS_Store
+
+# Python
 __pycache__/
 *.pyc
-.next/
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+
+# Node.js
 node_modules/
-.DS_Store
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.pnpm-store/
+
+# Next.js
+.next/
+out/
+*.tsbuildinfo
+
+# Turbo
+.turbo/
+
+# 数据库和上传文件
+doc2book/apps/api/doc2book.db
+doc2book/apps/api/doc2book.db-journal
+doc2book/apps/api/uploads/
+doc2book/apps/api/exports/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Claude AI
 .claude/
+
+# 环境变量
+.env
+.env.local
+.env.*.local
+
+# 日志
+*.log
+logs/
+
+# 临时文件
+tmp/
+temp/
+*.tmp

@@ -232,12 +232,21 @@ export class ProviderManager {
     text: string,
     options: TranslationOptions & { providerId?: string }
   ): Promise<TranslationResult> {
-    const systemPrompt = `你是一个专业的翻译专家。请将以下文本翻译成${options.targetLanguage}。
+    const basePrompt = `你是一个专业的翻译专家。请将以下文本翻译成${options.targetLanguage}。
 要求：
 1. 保持原文的语气和风格
 2. 确保翻译准确、流畅、自然
 3. 只输出翻译结果，不要添加任何解释或注释
 ${options.preserveFormatting ? '4. 保持原文的格式（段落、列表等）' : ''}`
+
+    const systemPrompt = options.systemPrompt
+      ? options.systemPrompt
+      : options.instruction
+      ? `${basePrompt}
+
+附加要求：
+${options.instruction}`
+      : basePrompt
 
     const response = await this.complete(
       [{ role: 'user', content: text }],

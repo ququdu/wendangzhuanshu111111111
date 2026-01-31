@@ -156,6 +156,8 @@ export interface AnalysisOptions {
     analyzeStyle?: boolean;
     /** 使用的 AI Provider ID */
     providerId?: string;
+    /** 额外指令 */
+    instruction?: string;
 }
 /**
  * 摘要选项
@@ -171,6 +173,8 @@ export interface SummaryOptions {
     language?: string;
     /** 使用的 AI Provider ID */
     providerId?: string;
+    /** 额外指令 */
+    instruction?: string;
 }
 /**
  * 结构检测选项
@@ -182,6 +186,8 @@ export interface StructureOptions {
     useAI?: boolean;
     /** 使用的 AI Provider ID */
     providerId?: string;
+    /** 额外指令 */
+    instruction?: string;
 }
 /**
  * 章节分割选项
@@ -197,4 +203,6 @@ export interface ChapterSplitOptions {
     useAI?: boolean;
     /** 使用的 AI Provider ID */
     providerId?: string;
+    /** 额外指令 */
+    instruction?: string;
 }

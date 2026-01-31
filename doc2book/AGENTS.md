@@ -92,6 +92,26 @@ pnpm test --filter=@doc2book/understanding   # Package tests
 pnpm lint             # All packages
 ```
 
+## COMPLEXITY HOTSPOTS
+
+### Critical Files (Review Required Before Modification)
+
+| File | Lines | Risk | Notes |
+|------|-------|------|-------|
+| apps/api/routers/tasks.py | 1041 | CRITICAL | Task orchestration - 7 task types, affects entire pipeline |
+| apps/processor/src/index.ts | 949 | CRITICAL | Processing hub - 20+ endpoints, all flows through here |
+| packages/shared/src/types.ts | 426 | HIGH | 33 type definitions - changes cascade to all packages |
+| apps/web/src/services/api.ts | 507 | HIGH | API client - 40+ methods, frontend-backend contract |
+| packages/providers/src/manager.ts | 362 | HIGH | AI provider management - multi-backend failover |
+| apps/web/src/app/project/[id]/page.tsx | 828 | HIGH | Main UI - 5 tabs, complex state management |
+
+### Modification Guidelines
+- **tasks.py**: Test full pipeline (parse → generate) after changes
+- **processor/index.ts**: Maintain endpoint backward compatibility
+- **shared/types.ts**: Version bump for breaking changes
+- **api.ts**: Update both frontend and backend simultaneously
+- **project/page.tsx**: Test all 5 tabs after UI changes
+
 ## NOTES
 
 - Uses pnpm for workspace management
@@ -99,3 +119,4 @@ pnpm lint             # All packages
 - Uploads stored in apps/api/uploads/
 - Build artifacts in dist/ and .next/ directories
 - Each package has independent test suite (Vitest for TS, pytest for Python)
+- Test infrastructure exists but no test files currently (all 8 TS packages configured with Vitest)

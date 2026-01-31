@@ -4,7 +4,7 @@
  */
 
 import { useState, useCallback, useEffect, useRef } from 'react';
-import { api, Project, Document, Task, ApiError, CreateProjectRequest, UpdateProjectRequest } from '@/services/api';
+import { api, Project, Document, Task, ApiError, CreateProjectRequest, UpdateProjectRequest, Skill, ProviderConfigPayload, ProviderTestPayload } from '@/services/api';
 
 // ==================== useProjects Hook ====================
 
@@ -224,6 +224,19 @@ export function useDocuments(projectId: string | null) {
     }
   }, [projectId]);
 
+  const fetchDocumentContent = useCallback(async (documentId: string) => {
+    if (!projectId) return null;
+    setError(null);
+    try {
+      const data = await api.getDocumentContent(projectId, documentId);
+      return data;
+    } catch (e) {
+      const message = e instanceof ApiError ? e.detail || e.message : 'Failed to fetch document content';
+      setError(message);
+      throw e;
+    }
+  }, [projectId]);
+
   useEffect(() => {
     fetchDocuments();
   }, [fetchDocuments]);
@@ -236,6 +249,7 @@ export function useDocuments(projectId: string | null) {
     fetchDocuments,
     uploadDocument,
     deleteDocument,
+    fetchDocumentContent,
   };
 }
 
@@ -413,5 +427,265 @@ export function useTask(taskId: string | null) {
     fetchTask,
     startPolling,
     stopPolling,
+  };
+}
+
+// ==================== 技能配置 Hooks ====================
+
+export function useGlobalSkills() {
+  const [skills, setSkills] = useState<Skill[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const fetchSkills = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const data = await api.getGlobalSkills();
+      setSkills(data.skills || []);
+      return data.skills || [];
+    } catch (e) {
+      const message = e instanceof ApiError ? e.detail || e.message : 'Failed to fetch skills';
+      setError(message);
+      return [];
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  const updateSkills = useCallback(async (nextSkills: Skill[]) => {
+    setError(null);
+    try {
+      const result = await api.updateGlobalSkills(nextSkills);
+      setSkills(result.skills || []);
+      return result.skills || [];
+    } catch (e) {
+      const message = e instanceof ApiError ? e.detail || e.message : 'Failed to update skills';
+      setError(message);
+      throw e;
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchSkills();
+  }, [fetchSkills]);
+
+  return {
+    skills,
+    loading,
+    error,
+    fetchSkills,
+    updateSkills,
+  };
+}
+
+export function useProjectSkills(projectId: string | null) {
+  const [skills, setSkills] = useState<Skill[] | null>(null);
+  const [inherits, setInherits] = useState(true);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const fetchSkills = useCallback(async () => {
+    if (!projectId) return null;
+    setLoading(true);
+    setError(null);
+    try {
+      const data = await api.getProjectSkills(projectId);
+      setSkills(data.skills ?? null);
+      setInherits(data.inherits ?? true);
+      return data.skills ?? null;
+    } catch (e) {
+      const message = e instanceof ApiError ? e.detail || e.message : 'Failed to fetch skills';
+      setError(message);
+      return null;
+    } finally {
+      setLoading(false);
+    }
+  }, [projectId]);
+
+  const updateSkills = useCallback(async (payload: { skills?: Skill[]; inherit?: boolean }) => {
+    if (!projectId) return null;
+    setError(null);
+    try {
+      const data = await api.updateProjectSkills(projectId, payload);
+      setSkills(data.skills ?? null);
+      setInherits(data.inherits ?? true);
+      return data.skills ?? null;
+    } catch (e) {
+      const message = e instanceof ApiError ? e.detail || e.message : 'Failed to update skills';
+      setError(message);
+      throw e;
+    }
+  }, [projectId]);
+
+  useEffect(() => {
+    fetchSkills();
+  }, [fetchSkills]);
+
+  return {
+    skills,
+    inherits,
+    loading,
+    error,
+    fetchSkills,
+    updateSkills,
+  };
+}
+
+export function useProviderStatus() {
+  const [providers, setProviders] = useState<Array<Record<string, unknown>>>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const fetchStatus = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const data = await api.getProviderStatus();
+      if (data.success) {
+        setProviders(data.providers || []);
+      } else {
+        setProviders([]);
+        setError(data.error || 'Provider 不可用');
+      }
+      return data;
+    } catch (e) {
+      const message = e instanceof ApiError ? e.detail || e.message : 'Failed to fetch providers';
+      setError(message);
+      setProviders([]);
+      return null;
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  return {
+    providers,
+    loading,
+    error,
+    fetchStatus,
+  };
+}
+
+export function useProviderConfig() {
+  const [config, setConfig] = useState<ProviderConfigPayload | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const fetchConfig = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const data = await api.getProviderConfig();
+      if (data.success && data.config) {
+        setConfig(data.config);
+      } else {
+        setConfig(null);
+        setError(data.error || '无法获取 Provider 配置');
+      }
+      return data;
+    } catch (e) {
+      const message = e instanceof ApiError ? e.detail || e.message : 'Failed to fetch provider config';
+      setError(message);
+      setConfig(null);
+      return null;
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  const updateConfig = useCallback(async (payload: ProviderConfigPayload) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const result = await api.updateProviderConfig(payload);
+      if (result.success && result.config) {
+        setConfig(result.config);
+      }
+      return result;
+    } catch (e) {
+      const message = e instanceof ApiError ? e.detail || e.message : 'Failed to update provider config';
+      setError(message);
+      throw e;
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  const testConnection = useCallback(async (payload: ProviderTestPayload) => {
+    setError(null);
+    try {
+      return await api.testProviderConnection(payload);
+    } catch (e) {
+      const message = e instanceof ApiError ? e.detail || e.message : 'Failed to test provider';
+      setError(message);
+      throw e;
+    }
+  }, []);
+
+  return {
+    config,
+    loading,
+    error,
+    fetchConfig,
+    updateConfig,
+    testConnection,
+  };
+}
+
+// ==================== 草稿 Hooks ====================
+
+export function useDrafts(projectId: string | null) {
+  const [drafts, setDrafts] = useState<any[]>([]);
+  const [primaryDraft, setPrimaryDraft] = useState<any | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const fetchDrafts = useCallback(async () => {
+    if (!projectId) return [];
+    setLoading(true);
+    setError(null);
+    try {
+      const data = await api.listDrafts(projectId);
+      setDrafts(data || []);
+      return data || [];
+    } catch (e) {
+      const message = e instanceof ApiError ? e.detail || e.message : 'Failed to fetch drafts';
+      setError(message);
+      return [];
+    } finally {
+      setLoading(false);
+    }
+  }, [projectId]);
+
+  const fetchPrimaryDraft = useCallback(async () => {
+    if (!projectId) return null;
+    setLoading(true);
+    setError(null);
+    try {
+      const data = await api.getPrimaryDraft(projectId);
+      setPrimaryDraft(data);
+      return data;
+    } catch (e) {
+      const message = e instanceof ApiError ? e.detail || e.message : 'Failed to fetch draft';
+      setError(message);
+      return null;
+    } finally {
+      setLoading(false);
+    }
+  }, [projectId]);
+
+  useEffect(() => {
+    fetchDrafts();
+    fetchPrimaryDraft();
+  }, [fetchDrafts, fetchPrimaryDraft]);
+
+  return {
+    drafts,
+    primaryDraft,
+    loading,
+    error,
+    fetchDrafts,
+    fetchPrimaryDraft,
   };
 }

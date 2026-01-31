@@ -22,6 +22,7 @@ export interface ProjectSettings {
   target_languages: string[];
   output_formats: string[];
   kdp_compliant: boolean;
+  processing_mode?: 'ai-enhanced' | 'local-lite';
 }
 
 export interface CreateProjectRequest {
@@ -31,6 +32,7 @@ export interface CreateProjectRequest {
   target_languages?: string[];
   output_formats?: string[];
   kdp_compliant?: boolean;
+  processing_mode?: 'ai-enhanced' | 'local-lite';
 }
 
 export interface UpdateProjectRequest {
@@ -41,6 +43,7 @@ export interface UpdateProjectRequest {
   output_formats?: string[];
   kdp_compliant?: boolean;
   current_stage?: string;
+  processing_mode?: 'ai-enhanced' | 'local-lite';
 }
 
 export interface Document {
@@ -92,6 +95,8 @@ export interface ExportFile {
   format: string;
   path: string;
   size: number;
+  filename?: string;
+  mime_type?: string;
 }
 
 // 书籍草稿类型
@@ -173,6 +178,32 @@ export interface TranslationJob {
   completed_at: string | null;
 }
 
+// Provider 配置
+export interface ProviderConfigItem {
+  id: string;
+  name: string;
+  type: string;
+  apiKey: string;
+  baseUrl?: string;
+  defaultModel?: string;
+  models?: string[];
+  enabled: boolean;
+  priority: number;
+}
+
+export interface ProviderConfigPayload {
+  providers: ProviderConfigItem[];
+  defaultProvider?: string;
+  fallbackChain?: string[];
+}
+
+export interface ProviderTestPayload {
+  provider: string;
+  apiKey: string;
+  baseUrl?: string;
+  model?: string;
+}
+
 export interface CreateTranslationRequest {
   project_id: string;
   source_draft_id: string;
@@ -184,6 +215,16 @@ export interface CreateTranslationRequest {
 export interface SupportedLanguage {
   code: string;
   name: string;
+}
+
+// 技能配置
+export interface Skill {
+  id: string;
+  name: string;
+  instruction: string;
+  stages: string[];
+  enabled: boolean;
+  options?: Record<string, unknown>;
 }
 
 // API 错误类
@@ -497,6 +538,58 @@ class ApiService {
   async completeTranslations(projectId: string): Promise<{ success: boolean; message: string; current_stage: string }> {
     return this.request(`/translations/project/${projectId}/complete`, {
       method: 'POST',
+    });
+  }
+
+  // ==================== 技能 API ====================
+
+  async getGlobalSkills(): Promise<{ skills: Skill[] }> {
+    return this.request('/skills/global');
+  }
+
+  async updateGlobalSkills(skills: Skill[]): Promise<{ success: boolean; skills: Skill[] }> {
+    return this.request('/skills/global', {
+      method: 'PUT',
+      body: JSON.stringify({ skills }),
+    });
+  }
+
+  async getProjectSkills(projectId: string): Promise<{ skills: Skill[] | null; inherits: boolean }> {
+    return this.request(`/skills/project/${projectId}`);
+  }
+
+  async updateProjectSkills(projectId: string, payload: { skills?: Skill[]; inherit?: boolean }): Promise<{ success: boolean; skills?: Skill[]; inherits: boolean }> {
+    return this.request(`/skills/project/${projectId}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async getEffectiveSkills(projectId: string): Promise<{ skills: Skill[]; source: string }> {
+    return this.request(`/skills/effective/${projectId}`);
+  }
+
+  // ==================== Provider 状态 API ====================
+
+  async getProviderStatus(): Promise<{ success: boolean; providers?: Array<Record<string, unknown>>; error?: string }> {
+    return this.request('/providers/status');
+  }
+
+  async getProviderConfig(): Promise<{ success: boolean; config?: ProviderConfigPayload; error?: string }> {
+    return this.request('/providers/config');
+  }
+
+  async updateProviderConfig(payload: ProviderConfigPayload): Promise<{ success: boolean; config?: ProviderConfigPayload; result?: Record<string, unknown>; error?: string }> {
+    return this.request('/providers/config', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async testProviderConnection(payload: ProviderTestPayload): Promise<{ success: boolean; status?: Record<string, unknown>; error?: string }> {
+    return this.request('/providers/test', {
+      method: 'POST',
+      body: JSON.stringify(payload),
     });
   }
 }

@@ -15,6 +15,8 @@ export interface SanitizeOptions {
   useAI?: boolean
   /** AI Provider ID */
   providerId?: string
+  /** 额外指令（AI 检测使用） */
+  instruction?: string
 }
 
 export interface DetectionResult {

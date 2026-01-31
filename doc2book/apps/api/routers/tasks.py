@@ -4,7 +4,7 @@
 
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List, Dict, Any
 from datetime import datetime
 from sqlalchemy import select
 import uuid
@@ -13,6 +13,7 @@ import json
 
 from services.database import get_db, get_db_session, AsyncSession
 from services import processor_client
+from services.skill_service import get_effective_skills, build_stage_options
 from services.logger import log_info, log_error, log_warning
 from models import Task, TaskStatus, TaskType, Document, Project
 
@@ -69,6 +70,14 @@ TASK_TO_STAGE = {
 }
 
 
+def get_processing_mode(project: Project) -> str:
+    settings = project.settings or {}
+    mode = settings.get("processing_mode") or "ai-enhanced"
+    if mode not in ["ai-enhanced", "local-lite"]:
+        return "ai-enhanced"
+    return mode
+
+
 async def run_task(task_id: str):
     """后台运行任务"""
     await log_info("task", f"开始执行任务: {task_id}")
@@ -95,22 +104,33 @@ async def run_task(task_id: str):
         docs_result = await db.execute(
             select(Document).where(Document.project_id == task.project_id)
         )
-        documents = docs_result.scalars().all()
+        documents = list(docs_result.scalars().all())
+
+        if not project:
+            task.status = TaskStatus.FAILED.value
+            task.error = "项目不存在"
+            task.message = "项目不存在"
+            task.completed_at = datetime.utcnow()
+            await db.commit()
+            return
 
         try:
+            processing_mode = get_processing_mode(project)
             # 根据任务类型执行不同的处理
+            skills = await get_effective_skills(str(task.project_id), db)
+
             if task.task_type == TaskType.PARSE.value:
                 await run_parse_task(task, documents, db)
             elif task.task_type == TaskType.CLEAN.value:
-                await run_clean_task(task, documents, db)
+                await run_clean_task(task, documents, db, skills, processing_mode)
             elif task.task_type == TaskType.UNDERSTAND.value:
-                await run_understand_task(task, documents, db)
+                await run_understand_task(task, documents, db, skills, processing_mode)
             elif task.task_type == TaskType.STRUCTURE.value:
-                await run_structure_task(task, documents, project, db)
+                await run_structure_task(task, documents, project, db, skills, processing_mode)
             elif task.task_type == TaskType.CREATE.value:
-                await run_create_task(task, documents, db)
+                await run_create_task(task, documents, db, skills)
             elif task.task_type == TaskType.TRANSLATE.value:
-                await run_translate_task(task, project, db)
+                await run_translate_task(task, project, db, skills)
             elif task.task_type == TaskType.GENERATE.value:
                 await run_generate_task(task, project, db)
 
@@ -189,14 +209,16 @@ async def run_parse_task(task: Task, documents: list, db: AsyncSession):
             if result.get("success"):
                 doc.parsed_content = {
                     "ast": result.get("ast"),
-                    "metadata": result.get("metadata")
+                    "metadata": result.get("metadata"),
+                    "source": "real"
                 }
                 doc.status = "parsed"
             else:
                 # 解析失败，记录错误但继续处理其他文档
                 doc.parsed_content = {
                     "error": result.get("error", "解析失败"),
-                    "fallback": True
+                    "fallback": True,
+                    "source": "fallback"
                 }
                 doc.status = "parse_failed"
         else:
@@ -206,7 +228,8 @@ async def run_parse_task(task: Task, documents: list, db: AsyncSession):
                 "title": doc.original_filename,
                 "content": f"[基础解析 - {doc.format}]",
                 "note": "处理服务未启动，使用基础解析模式",
-                "sections": []
+                "sections": [],
+                "source": "basic"
             }
             doc.status = "parsed"
 
@@ -217,7 +240,13 @@ async def run_parse_task(task: Task, documents: list, db: AsyncSession):
     await db.commit()
 
 
-async def run_understand_task(task: Task, documents: list, db: AsyncSession):
+async def run_understand_task(
+    task: Task,
+    documents: list,
+    db: AsyncSession,
+    skills: List[Dict[str, Any]],
+    processing_mode: str = "ai-enhanced"
+):
     """执行理解任务 - 分析文档结构"""
     total = len(documents)
     if total == 0:
@@ -226,6 +255,9 @@ async def run_understand_task(task: Task, documents: list, db: AsyncSession):
 
     # 检查处理服务是否可用
     service_available = await processor_client.check_health()
+    stage_options = build_stage_options(skills, "understand")
+    if processing_mode == "local-lite":
+        stage_options["useAI"] = False
 
     for i, doc in enumerate(documents):
         if not doc.parsed_content:
@@ -240,20 +272,42 @@ async def run_understand_task(task: Task, documents: list, db: AsyncSession):
         await db.commit()
 
         if service_available and doc.parsed_content.get("ast"):
-            # 调用处理服务分析结构
-            result = await processor_client.analyze_structure(doc.parsed_content.get("ast"))
-
-            if result.get("success"):
-                doc.analysis_result = result.get("analysis")
-                doc.status = "analyzed"
+            if processing_mode == "local-lite":
+                result = await processor_client.analyze_structure(doc.parsed_content.get("ast"))
+                if result.get("success") and result.get("analysis"):
+                    doc.analysis_result = {
+                        **result.get("analysis"),
+                        "source": "basic",
+                    }
+                    doc.status = "analyzed"
+                else:
+                    doc.analysis_result = {
+                        "summary": "结构分析失败",
+                        "error": result.get("error"),
+                        "fallback": True,
+                        "source": "fallback"
+                    }
+                    doc.status = "analyzed"
             else:
-                # 分析失败，使用基础分析
-                doc.analysis_result = {
-                    "summary": "结构分析失败",
-                    "error": result.get("error"),
-                    "fallback": True
-                }
-                doc.status = "analyzed"
+                # 调用处理服务深度分析
+                result = await processor_client.deep_analyze(doc.parsed_content.get("ast"), stage_options)
+
+                if result.get("success"):
+                    doc.analysis_result = {
+                        **result,
+                        "source": "ai",
+                        "instruction": stage_options.get("instruction")
+                    }
+                    doc.status = "analyzed"
+                else:
+                    # 分析失败，使用基础分析
+                    doc.analysis_result = {
+                        "summary": "结构分析失败",
+                        "error": result.get("error"),
+                        "fallback": True,
+                        "source": "fallback"
+                    }
+                    doc.status = "analyzed"
         else:
             # 处理服务不可用，使用基础分析
             parsed = doc.parsed_content or {}
@@ -265,7 +319,8 @@ async def run_understand_task(task: Task, documents: list, db: AsyncSession):
                     "paragraphCount": 0,
                     "wordCount": 0
                 },
-                "note": "基础分析模式 - AI 分析需要配置 API Key"
+                "note": "基础分析模式 - AI 分析需要配置 API Key",
+                "source": "basic"
             }
             doc.status = "analyzed"
 
@@ -275,7 +330,13 @@ async def run_understand_task(task: Task, documents: list, db: AsyncSession):
     await db.commit()
 
 
-async def run_clean_task(task: Task, documents: list, db: AsyncSession):
+async def run_clean_task(
+    task: Task,
+    documents: list,
+    db: AsyncSession,
+    skills: List[Dict[str, Any]],
+    processing_mode: str = "ai-enhanced"
+):
     """执行清洗任务 - 检测并移除广告、联系方式等无关内容"""
     total = len(documents)
     if total == 0:
@@ -284,6 +345,11 @@ async def run_clean_task(task: Task, documents: list, db: AsyncSession):
 
     # 检查处理服务是否可用
     service_available = await processor_client.check_health()
+    stage_options = build_stage_options(skills, "clean")
+    if processing_mode == "local-lite":
+        stage_options["useAI"] = False
+    elif stage_options.get("instruction") and stage_options.get("useAI") is None:
+        stage_options["useAI"] = True
 
     for i, doc in enumerate(documents):
         if not doc.parsed_content:
@@ -306,7 +372,37 @@ async def run_clean_task(task: Task, documents: list, db: AsyncSession):
         elif parsed.get("content"):
             content = parsed.get("content")
 
-        if service_available and content:
+        use_ai_clean = (
+            processing_mode == "ai-enhanced"
+            and service_available
+            and doc.parsed_content
+            and doc.parsed_content.get("ast")
+        )
+
+        if use_ai_clean:
+            sanitize_result = await processor_client.sanitize_ast(
+                doc.parsed_content.get("ast"),
+                stage_options
+            )
+
+            if sanitize_result.get("success"):
+                sanitized_ast = sanitize_result.get("sanitizedAst") or sanitize_result.get("sanitized_ast")
+                sanitized_text = extract_text_from_ast(sanitized_ast) if sanitized_ast else content
+                doc.sanitized_content = {
+                    "type": "document",
+                    "content": sanitized_text,
+                    "removed_count": sanitize_result.get("totalReplacements") or sanitize_result.get("total_replacements"),
+                    "source": "ai" if stage_options.get("useAI") else "rule",
+                    "instruction": stage_options.get("instruction")
+                }
+            else:
+                doc.sanitized_content = {
+                    "type": "document",
+                    "content": content or "[无内容]",
+                    "error": sanitize_result.get("error"),
+                    "source": "fallback"
+                }
+        elif service_available and content:
             # 调用处理服务检测实体
             detect_result = await processor_client.detect_entities(content)
 
@@ -322,14 +418,16 @@ async def run_clean_task(task: Task, documents: list, db: AsyncSession):
                             "type": "document",
                             "content": replace_result.get("text"),
                             "removed_items": entities,
-                            "removed_count": replace_result.get("replacedCount", 0)
+                            "removed_count": replace_result.get("replacedCount", 0),
+                            "source": "rule"
                         }
                     else:
                         doc.sanitized_content = {
                             "type": "document",
                             "content": content,
                             "removed_items": [],
-                            "note": "替换失败，保留原内容"
+                            "note": "替换失败，保留原内容",
+                            "source": "rule"
                         }
                 else:
                     # 没有检测到需要移除的内容
@@ -337,13 +435,15 @@ async def run_clean_task(task: Task, documents: list, db: AsyncSession):
                         "type": "document",
                         "content": content,
                         "removed_items": [],
-                        "note": "未检测到需要移除的敏感信息"
+                        "note": "未检测到需要移除的敏感信息",
+                        "source": "rule"
                     }
             else:
                 doc.sanitized_content = {
                     "type": "document",
                     "content": content,
-                    "error": detect_result.get("error")
+                    "error": detect_result.get("error"),
+                    "source": "rule"
                 }
         else:
             # 处理服务不可用
@@ -351,7 +451,8 @@ async def run_clean_task(task: Task, documents: list, db: AsyncSession):
                 "type": "document",
                 "content": content or "[无内容]",
                 "removed_items": [],
-                "note": "基础模式 - 处理服务未启动"
+                "note": "基础模式 - 处理服务未启动",
+                "source": "basic"
             }
 
         doc.status = "cleaned"
@@ -363,6 +464,8 @@ async def run_clean_task(task: Task, documents: list, db: AsyncSession):
 
 def extract_text_from_ast(ast: dict) -> str:
     """从 AST 中提取纯文本"""
+    if not ast:
+        return ""
     texts = []
 
     def traverse(node):
@@ -371,6 +474,8 @@ def extract_text_from_ast(ast: dict) -> str:
                 texts.append(node.get("text"))
             if node.get("content") and isinstance(node.get("content"), str):
                 texts.append(node.get("content"))
+            if node.get("content") and isinstance(node.get("content"), list):
+                traverse(node.get("content"))
             if node.get("children"):
                 for child in node.get("children", []):
                     traverse(child)
@@ -382,13 +487,52 @@ def extract_text_from_ast(ast: dict) -> str:
     return "\n".join(texts)
 
 
-async def run_structure_task(task: Task, documents: list, project: Project, db: AsyncSession):
+def extract_text_from_nodes(nodes: list) -> str:
+    """从内容节点中提取纯文本"""
+    if not nodes:
+        return ""
+
+    texts = []
+
+    def traverse(node_list):
+        if isinstance(node_list, dict):
+            if node_list.get("text"):
+                texts.append(node_list.get("text"))
+            if node_list.get("content") and isinstance(node_list.get("content"), str):
+                texts.append(node_list.get("content"))
+            if node_list.get("children"):
+                traverse(node_list.get("children"))
+            return
+        if not isinstance(node_list, list):
+            return
+        for node in node_list:
+            traverse(node)
+
+    traverse(nodes)
+    return "\n".join([t for t in texts if t])
+
+
+async def run_structure_task(
+    task: Task,
+    documents: list,
+    project: Project,
+    db: AsyncSession,
+    skills: List[Dict[str, Any]],
+    processing_mode: str = "ai-enhanced"
+):
     """执行结构化任务 - 生成书籍目录和章节结构"""
     from models import BookDraft
 
     task.message = "正在生成书籍结构..."
     task.progress = 10
     await db.commit()
+
+    stage_options = build_stage_options(skills, "structure")
+    if processing_mode == "local-lite":
+        stage_options["useAI"] = False
+    elif stage_options.get("instruction") and stage_options.get("useAI") is None:
+        stage_options["useAI"] = True
+    service_available = await processor_client.check_health()
 
     # 收集所有文档的分析结果
     all_content = []
@@ -404,17 +548,41 @@ async def run_structure_task(task: Task, documents: list, project: Project, db: 
     task.message = "正在生成目录结构..."
     await db.commit()
 
-    # 生成书籍结构（基础版本，后续可调用 AI）
+    # 生成书籍结构
     chapters = []
-    for i, item in enumerate(all_content, 1):
-        chapter = {
-            "id": str(uuid.uuid4()),
-            "number": i,
-            "title": f"第 {i} 章: {item['filename'].rsplit('.', 1)[0]}",
-            "content": item["content"][:5000] if item["content"] else "",  # 限制长度
-            "summary": item["analysis"].get("summary", "") if item["analysis"] else "",
-        }
-        chapters.append(chapter)
+    chapter_index = 1
+
+    use_ai_structure = processing_mode == "ai-enhanced" and service_available
+
+    if use_ai_structure:
+        for doc in documents:
+            if not doc.parsed_content or not doc.parsed_content.get("ast"):
+                continue
+
+            result = await processor_client.structure_content(doc.parsed_content.get("ast"), stage_options)
+            if result.get("success") and result.get("chapters"):
+                for chapter in result.get("chapters"):
+                    chapter_text = extract_text_from_nodes(chapter.get("content") or [])
+                    chapters.append({
+                        "id": chapter.get("id") or str(uuid.uuid4()),
+                        "number": chapter_index,
+                        "title": chapter.get("title") or f"第 {chapter_index} 章",
+                        "content": chapter_text[:8000] if chapter_text else "",
+                        "summary": "",
+                    })
+                    chapter_index += 1
+
+    if not chapters:
+        for item in all_content:
+            chapter = {
+                "id": str(uuid.uuid4()),
+                "number": chapter_index,
+                "title": f"第 {chapter_index} 章: {item['filename'].rsplit('.', 1)[0]}",
+                "content": item["content"][:5000] if item["content"] else "",
+                "summary": item["analysis"].get("summary", "") if item["analysis"] else "",
+            }
+            chapters.append(chapter)
+            chapter_index += 1
 
     task.progress = 60
     task.message = "正在生成书籍草稿..."
@@ -445,12 +613,14 @@ async def run_structure_task(task: Task, documents: list, project: Project, db: 
     task.result_data = {
         "draft_id": draft_id,
         "chapter_count": len(chapters),
-        "note": "书籍结构已生成，请在审阅阶段进行编辑"
+        "note": "书籍结构已生成，请在审阅阶段进行编辑",
+        "source": "ai" if chapters and service_available else "basic",
+        "instruction": stage_options.get("instruction")
     }
     await db.commit()
 
 
-async def run_create_task(task: Task, documents: list, db: AsyncSession):
+async def run_create_task(task: Task, documents: list, db: AsyncSession, skills: List[Dict[str, Any]]):
     """执行创作任务 - 调用 AI 进行内容重写"""
     total = len(documents)
     if total == 0:
@@ -461,6 +631,7 @@ async def run_create_task(task: Task, documents: list, db: AsyncSession):
 
     # 检查处理服务是否可用
     service_available = await processor_client.check_health()
+    stage_options = build_stage_options(skills, "create")
     if not service_available:
         await log_error("creator", "处理服务未启动，无法进行 AI 重写")
         task.message = "处理服务未启动，无法进行 AI 重写"
@@ -502,13 +673,17 @@ async def run_create_task(task: Task, documents: list, db: AsyncSession):
         # 调用 Processor 服务进行 AI 重写
         result = await processor_client.rewrite_content(
             content=content,
-            style="book",
-            language="zh"
+            options=stage_options
         )
 
         if result.get("success"):
             # 获取重写后的内容
-            rewritten = result.get("rewritten") or result.get("content") or result.get("text")
+            rewritten = (
+                result.get("rewritten")
+                or result.get("rewrittenContent")
+                or result.get("content")
+                or result.get("text")
+            )
             if rewritten:
                 doc.rewritten_content = rewritten
                 doc.status = "rewritten"
@@ -614,6 +789,76 @@ def calculate_similarity(text1: str, text2: str) -> float:
     return intersection / union if union > 0 else 0.0
 
 
+def build_content_nodes(text: str) -> list:
+    """将纯文本转换为内容节点"""
+    if not text:
+        return []
+
+    paragraphs = [line.strip() for line in text.splitlines() if line.strip()]
+    return [{"type": "paragraph", "text": paragraph} for paragraph in paragraphs]
+
+
+def build_book_structure(project: Project, book_content: list) -> dict:
+    """构建生成器所需的书籍结构"""
+    settings = project.settings or {}
+    language = settings.get("source_language") or "zh"
+
+    chapters = []
+    for index, chapter in enumerate(book_content, 1):
+        content = chapter.get("content") or ""
+        chapters.append({
+            "id": f"chapter_{index}",
+            "title": chapter.get("title") or f"第 {index} 章",
+            "level": 1,
+            "content": build_content_nodes(content),
+            "children": [],
+            "wordCount": len(content.split()),
+            "status": "draft",
+        })
+
+    toc_entries = [
+        {"id": ch["id"], "title": ch["title"], "level": 1, "children": []}
+        for ch in chapters
+    ]
+
+    return {
+        "metadata": {
+            "title": project.name,
+            "subtitle": None,
+            "author": settings.get("author") or "未知作者",
+            "language": language,
+            "targetLanguages": settings.get("target_languages") or ["zh"],
+            "category": [],
+            "keywords": [],
+            "description": project.description or "",
+            "copyright": "版权所有，未经许可不得转载",
+        },
+        "frontMatter": {
+            "titlePage": True,
+            "copyright": True,
+            "dedication": None,
+            "tableOfContents": toc_entries,
+            "preface": None,
+            "foreword": None,
+            "acknowledgments": None,
+        },
+        "body": {
+            "introduction": None,
+            "parts": [],
+            "chapters": chapters,
+        },
+        "backMatter": {
+            "epilogue": None,
+            "appendices": [],
+            "glossary": [],
+            "bibliography": [],
+            "index": [],
+            "aboutAuthor": None,
+            "alsoByAuthor": [],
+        },
+    }
+
+
 async def run_generate_task(task: Task, project: Project, db: AsyncSession):
     """执行生成任务 - 生成书籍文件"""
     import os
@@ -637,55 +882,73 @@ async def run_generate_task(task: Task, project: Project, db: AsyncSession):
                 "content": doc.rewritten_content
             })
 
+    if not book_content:
+        task.status = TaskStatus.FAILED.value
+        task.message = "没有可生成的内容，请先完成创作阶段"
+        task.error = "未找到重写后的内容"
+        task.completed_at = datetime.utcnow()
+        await db.commit()
+        return
+
     task.progress = 30
     task.message = "正在组织书籍结构..."
     await db.commit()
 
     # 创建导出目录
-    export_dir = os.path.join(os.path.dirname(__file__), "..", "exports", project.id)
+    export_dir = os.path.join(os.path.dirname(__file__), "..", "exports", project.id, task.id)
     os.makedirs(export_dir, exist_ok=True)
 
     task.progress = 50
     task.message = "正在生成书籍文件..."
     await db.commit()
 
-    # 生成简单的 Markdown 书籍
-    book_md = f"# {project.name}\n\n"
-    book_md += f"*{project.description or ''}*\n\n"
-    book_md += "---\n\n"
+    # 调用处理服务生成 EPUB/PDF
+    service_available = await processor_client.check_health()
+    if not service_available:
+        task.status = TaskStatus.FAILED.value
+        task.message = "处理服务未启动，无法生成书籍"
+        task.error = "Processor 服务不可用，请先启动处理服务"
+        task.completed_at = datetime.utcnow()
+        await db.commit()
+        return
 
-    for i, chapter in enumerate(book_content, 1):
-        book_md += f"## 第 {i} 章: {chapter['title']}\n\n"
-        book_md += chapter['content']
-        book_md += "\n\n---\n\n"
+    book_structure = build_book_structure(project, book_content)
+    settings = project.settings or {}
+    formats = settings.get("output_formats") or ["epub"]
+    validate_kdp = settings.get("kdp_compliant", True)
 
-    # 保存 Markdown 文件
-    md_path = os.path.join(export_dir, "book.md")
-    with open(md_path, "w", encoding="utf-8") as f:
-        f.write(book_md)
+    format_option = "epub"
+    if "epub" in formats and "pdf" in formats:
+        format_option = "both"
+    elif "pdf" in formats:
+        format_option = "pdf"
+
+    result = await processor_client.generate_book(
+        book=book_structure,
+        options={
+            "format": format_option,
+            "outputDir": os.path.abspath(export_dir),
+            "filename": "book",
+            "validateKdp": validate_kdp,
+        }
+    )
+
+    if not result.get("success"):
+        task.status = TaskStatus.FAILED.value
+        task.message = "书籍生成失败"
+        task.error = result.get("error", "生成失败")
+        task.completed_at = datetime.utcnow()
+        await db.commit()
+        return
 
     task.progress = 80
     task.message = "正在验证输出..."
     await db.commit()
 
-    # TODO: 调用 generator 包生成 EPUB/PDF
-    # 目前只生成 Markdown
-
     task.progress = 100
     task.result_data = {
-        "files": [
-            {
-                "format": "md",
-                "path": md_path,
-                "size": len(book_md.encode("utf-8")),
-                "note": "Markdown 格式 - EPUB/PDF 生成需要完整配置"
-            }
-        ],
-        "validation": {
-            "kdp_compliant": True,
-            "warnings": [],
-            "note": "基础验证通过"
-        },
+        "files": result.get("files", []),
+        "validation": result.get("validation"),
         "summary": {
             "chapters": len(book_content),
             "total_documents": len(documents)
@@ -694,7 +957,7 @@ async def run_generate_task(task: Task, project: Project, db: AsyncSession):
     await db.commit()
 
 
-async def run_translate_task(task: Task, project: Project, db: AsyncSession):
+async def run_translate_task(task: Task, project: Project, db: AsyncSession, skills: List[Dict[str, Any]]):
     """执行翻译任务 - 翻译书籍到目标语言"""
     from models import BookDraft, TranslationJob
 
@@ -702,7 +965,22 @@ async def run_translate_task(task: Task, project: Project, db: AsyncSession):
     task.progress = 10
     await db.commit()
 
-    # 获取主版本草稿（中文）
+    stage_options = build_stage_options(skills, "translate")
+
+    if not project:
+        task.message = "项目不存在"
+        task.status = TaskStatus.FAILED.value
+        await db.commit()
+        return
+
+    target_languages = (project.settings or {}).get("target_languages") or []
+    if not target_languages:
+        task.message = "未设置目标语言"
+        task.progress = 100
+        await db.commit()
+        return
+
+    # 获取主版本草稿
     draft_result = await db.execute(
         select(BookDraft).where(
             BookDraft.project_id == project.id,
@@ -717,20 +995,36 @@ async def run_translate_task(task: Task, project: Project, db: AsyncSession):
         await db.commit()
         return
 
-    # 获取待翻译的任务
-    jobs_result = await db.execute(
-        select(TranslationJob).where(
-            TranslationJob.project_id == project.id,
-            TranslationJob.status == "pending"
+    # 创建或获取翻译任务
+    translation_jobs: List[TranslationJob] = []
+    for language in target_languages:
+        existing_result = await db.execute(
+            select(TranslationJob).where(
+                TranslationJob.project_id == project.id,
+                TranslationJob.source_draft_id == source_draft.id,
+                TranslationJob.target_language == language,
+                TranslationJob.status.in_(["pending", "running"])
+            )
         )
-    )
-    translation_jobs = jobs_result.scalars().all()
+        existing = existing_result.scalar_one_or_none()
+        if existing:
+            translation_jobs.append(existing)
+            continue
 
-    if not translation_jobs:
-        task.message = "没有待翻译的任务"
-        task.progress = 100
-        await db.commit()
-        return
+        job = TranslationJob(
+            id=str(uuid.uuid4()),
+            project_id=project.id,
+            source_draft_id=source_draft.id,
+            target_language=language,
+            provider=stage_options.get("mode") or "auto",
+            preserve_formatting=True,
+            status="pending",
+            progress=0
+        )
+        db.add(job)
+        translation_jobs.append(job)
+
+    await db.flush()
 
     total = len(translation_jobs)
     completed = 0
@@ -741,28 +1035,65 @@ async def run_translate_task(task: Task, project: Project, db: AsyncSession):
         await db.commit()
 
         try:
-            # 更新翻译任务状态
             job.status = "running"
             await db.commit()
 
-            # TODO: 调用翻译服务
-            # 目前使用占位符
             translated_chapters = []
-            for chapter in (source_draft.chapters or []):
+            for i, chapter in enumerate(source_draft.chapters or []):
+                translate_options = {
+                    **stage_options,
+                    "sourceLanguage": (project.settings or {}).get("source_language") or None,
+                }
+
+                title_result = await processor_client.translate_content(
+                    content=chapter.get("title", ""),
+                    target_language=job.target_language,
+                    options=translate_options
+                )
+
+                content_result = await processor_client.translate_content(
+                    content=chapter.get("content", ""),
+                    target_language=job.target_language,
+                    options=translate_options
+                )
+
                 translated_chapters.append({
                     **chapter,
-                    "content": f"[{job.target_language} 翻译] {chapter.get('content', '')[:200]}...\n\n(翻译功能需要配置 DeepL 或 AI API Key)",
+                    "title": title_result.get("translatedContent") or chapter.get("title"),
+                    "content": content_result.get("translatedContent") or chapter.get("content")
                 })
 
-            # 创建翻译后的草稿
+                job.progress = int((i + 1) / max(len(source_draft.chapters or []), 1) * 100)
+                await db.commit()
+
+            # 翻译元数据
+            translated_title = source_draft.title
+            translated_description = source_draft.description
+
+            if source_draft.title:
+                title_result = await processor_client.translate_content(
+                    content=source_draft.title,
+                    target_language=job.target_language,
+                    options=stage_options
+                )
+                translated_title = title_result.get("translatedContent") or source_draft.title
+
+            if source_draft.description:
+                desc_result = await processor_client.translate_content(
+                    content=source_draft.description,
+                    target_language=job.target_language,
+                    options=stage_options
+                )
+                translated_description = desc_result.get("translatedContent") or source_draft.description
+
             result_draft_id = str(uuid.uuid4())
             result_draft = BookDraft(
                 id=result_draft_id,
                 project_id=project.id,
                 language=job.target_language,
                 version=1,
-                title=f"{source_draft.title} ({job.target_language})",
-                description=source_draft.description,
+                title=translated_title,
+                description=translated_description,
                 table_of_contents=source_draft.table_of_contents,
                 chapters=translated_chapters,
                 status="draft",
@@ -770,7 +1101,6 @@ async def run_translate_task(task: Task, project: Project, db: AsyncSession):
             )
             db.add(result_draft)
 
-            # 更新翻译任务
             job.status = "completed"
             job.progress = 100
             job.result_draft_id = result_draft_id
@@ -789,7 +1119,8 @@ async def run_translate_task(task: Task, project: Project, db: AsyncSession):
     task.result_data = {
         "completed": completed,
         "total": total,
-        "languages": [job.target_language for job in translation_jobs if job.status == "completed"]
+        "languages": [job.target_language for job in translation_jobs if job.status == "completed"],
+        "instruction": stage_options.get("instruction")
     }
     await db.commit()
 

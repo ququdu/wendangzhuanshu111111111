@@ -165,6 +165,8 @@ export interface AnalysisOptions {
   analyzeStyle?: boolean
   /** 使用的 AI Provider ID */
   providerId?: string
+  /** 额外指令 */
+  instruction?: string
 }
 
 /**
@@ -181,6 +183,8 @@ export interface SummaryOptions {
   language?: string
   /** 使用的 AI Provider ID */
   providerId?: string
+  /** 额外指令 */
+  instruction?: string
 }
 
 /**
@@ -193,6 +197,8 @@ export interface StructureOptions {
   useAI?: boolean
   /** 使用的 AI Provider ID */
   providerId?: string
+  /** 额外指令 */
+  instruction?: string
 }
 
 /**
@@ -209,4 +215,6 @@ export interface ChapterSplitOptions {
   useAI?: boolean
   /** 使用的 AI Provider ID */
   providerId?: string
+  /** 额外指令 */
+  instruction?: string
 }

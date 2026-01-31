@@ -3,15 +3,16 @@
 """
 
 from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
-from sqlalchemy.orm import Session
+from sqlalchemy import select
 from pydantic import BaseModel
-from typing import Optional, List
+from typing import Optional, List, Any
 from datetime import datetime
 import uuid
 import httpx
 import asyncio
 
-from services.database import get_db
+from services.database import get_db, AsyncSession
+from services.skill_service import get_effective_skills, build_stage_options
 from models import TranslationJob, BookDraft, Project, ProjectStage
 
 router = APIRouter(tags=["translations"])
@@ -69,19 +70,22 @@ async def get_supported_languages():
 
 
 @router.get("/project/{project_id}")
-async def list_translations(project_id: str, db: Session = Depends(get_db)):
+async def list_translations(project_id: str, db: AsyncSession = Depends(get_db)):
     """获取项目的所有翻译任务"""
-    jobs = db.query(TranslationJob).filter(
-        TranslationJob.project_id == project_id
-    ).order_by(TranslationJob.created_at.desc()).all()
-
+    result = await db.execute(
+        select(TranslationJob)
+        .where(TranslationJob.project_id == project_id)
+        .order_by(TranslationJob.created_at.desc())
+    )
+    jobs = result.scalars().all()
     return [job.to_dict() for job in jobs]
 
 
 @router.get("/{job_id}")
-async def get_translation(job_id: str, db: Session = Depends(get_db)):
+async def get_translation(job_id: str, db: AsyncSession = Depends(get_db)):
     """获取翻译任务详情"""
-    job = db.query(TranslationJob).filter(TranslationJob.id == job_id).first()
+    result = await db.execute(select(TranslationJob).where(TranslationJob.id == job_id))
+    job = result.scalar_one_or_none()
 
     if not job:
         raise HTTPException(status_code=404, detail="翻译任务不存在")
@@ -93,21 +97,25 @@ async def get_translation(job_id: str, db: Session = Depends(get_db)):
 async def create_translations(
     request: CreateTranslationRequest,
     background_tasks: BackgroundTasks,
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """创建翻译任务（支持多语言并发）"""
     # 验证项目
-    project = db.query(Project).filter(Project.id == request.project_id).first()
-    if not project:
+    project_result = await db.execute(select(Project).where(Project.id == request.project_id))
+    project = project_result.scalar_one_or_none()
+    if project is None:
         raise HTTPException(status_code=404, detail="项目不存在")
 
     # 验证源草稿
-    source_draft = db.query(BookDraft).filter(BookDraft.id == request.source_draft_id).first()
-    if not source_draft:
+    source_result = await db.execute(select(BookDraft).where(BookDraft.id == request.source_draft_id))
+    source_draft = source_result.scalar_one_or_none()
+    if source_draft is None:
         raise HTTPException(status_code=404, detail="源草稿不存在")
 
+    source_draft_any: Any = source_draft
+
     # 验证源草稿已审阅
-    if source_draft.status != "approved":
+    if source_draft_any.status != "approved":
         raise HTTPException(status_code=400, detail="源草稿尚未审阅完成")
 
     # 验证语言
@@ -117,14 +125,18 @@ async def create_translations(
 
     # 创建翻译任务
     jobs = []
+    stage_options = build_stage_options(await get_effective_skills(request.project_id, db), "translate")
     for target_language in request.target_languages:
         # 检查是否已有相同语言的翻译任务
-        existing = db.query(TranslationJob).filter(
-            TranslationJob.project_id == request.project_id,
-            TranslationJob.source_draft_id == request.source_draft_id,
-            TranslationJob.target_language == target_language,
-            TranslationJob.status.in_(["pending", "running"])
-        ).first()
+        existing_result = await db.execute(
+            select(TranslationJob).where(
+                TranslationJob.project_id == request.project_id,
+                TranslationJob.source_draft_id == request.source_draft_id,
+                TranslationJob.target_language == target_language,
+                TranslationJob.status.in_(["pending", "running"])
+            )
+        )
+        existing = existing_result.scalar_one_or_none()
 
         if existing:
             continue
@@ -142,15 +154,15 @@ async def create_translations(
         db.add(job)
         jobs.append(job)
 
-    db.commit()
+    await db.flush()
 
     # 刷新获取完整数据
     for job in jobs:
-        db.refresh(job)
+        await db.refresh(job)
 
     # 在后台执行翻译
     for job in jobs:
-        background_tasks.add_task(run_translation_job, job.id, source_draft.to_dict())
+        background_tasks.add_task(run_translation_job, job.id, source_draft_any.to_dict(), stage_options)
 
     return {
         "success": True,
@@ -159,7 +171,7 @@ async def create_translations(
     }
 
 
-async def run_translation_job(job_id: str, source_draft: dict):
+async def run_translation_job(job_id: str, source_draft: dict, stage_options: Optional[dict] = None):
     """执行翻译任务"""
     from services.database import SessionLocal
 
@@ -169,9 +181,11 @@ async def run_translation_job(job_id: str, source_draft: dict):
         if not job:
             return
 
+        job_any: Any = job
+
         # 更新状态为运行中
-        job.status = "running"
-        job.progress = 0
+        job_any.status = "running"
+        job_any.progress = 0
         db.commit()
 
         # 准备翻译内容
@@ -189,7 +203,8 @@ async def run_translation_job(job_id: str, source_draft: dict):
                             "content": chapter.get("title", ""),
                             "targetLanguage": job.target_language,
                             "options": {
-                                "preserveFormatting": job.preserve_formatting
+                                "preserveFormatting": job.preserve_formatting,
+                                **(stage_options or {})
                             }
                         }
                     )
@@ -202,7 +217,8 @@ async def run_translation_job(job_id: str, source_draft: dict):
                             "content": chapter.get("content", ""),
                             "targetLanguage": job.target_language,
                             "options": {
-                                "preserveFormatting": job.preserve_formatting
+                                "preserveFormatting": job.preserve_formatting,
+                                **(stage_options or {})
                             }
                         }
                     )
@@ -215,7 +231,7 @@ async def run_translation_job(job_id: str, source_draft: dict):
                     })
 
                     # 更新进度
-                    job.progress = int((i + 1) / total_chapters * 100)
+                    job_any.progress = int((i + 1) / total_chapters * 100)
                     db.commit()
 
                 except Exception as e:
@@ -231,7 +247,8 @@ async def run_translation_job(job_id: str, source_draft: dict):
                         f"{PROCESSOR_URL}/translate",
                         json={
                             "content": source_draft.get("title"),
-                            "targetLanguage": job.target_language
+                            "targetLanguage": job.target_language,
+                            "options": stage_options or {}
                         }
                     )
                     translated_title = title_resp.json().get("translatedContent", source_draft.get("title"))
@@ -244,7 +261,8 @@ async def run_translation_job(job_id: str, source_draft: dict):
                         f"{PROCESSOR_URL}/translate",
                         json={
                             "content": source_draft.get("description"),
-                            "targetLanguage": job.target_language
+                            "targetLanguage": job.target_language,
+                            "options": stage_options or {}
                         }
                     )
                     translated_description = desc_resp.json().get("translatedContent", source_draft.get("description"))
@@ -259,7 +277,7 @@ async def run_translation_job(job_id: str, source_draft: dict):
         # 创建翻译后的草稿
         result_draft = BookDraft(
             id=str(uuid.uuid4()),
-            project_id=job.project_id,
+            project_id=job_any.project_id,
             language=job.target_language,
             version=1,
             title=translated_title,
@@ -276,10 +294,10 @@ async def run_translation_job(job_id: str, source_draft: dict):
         db.add(result_draft)
 
         # 更新任务状态
-        job.status = "completed"
-        job.progress = 100
-        job.result_draft_id = result_draft.id
-        job.completed_at = datetime.utcnow()
+        job_any.status = "completed"
+        job_any.progress = 100
+        job_any.result_draft_id = result_draft.id
+        job_any.completed_at = datetime.utcnow()
 
         db.commit()
 
@@ -287,8 +305,9 @@ async def run_translation_job(job_id: str, source_draft: dict):
         print(f"翻译任务失败: {e}")
         job = db.query(TranslationJob).filter(TranslationJob.id == job_id).first()
         if job:
-            job.status = "failed"
-            job.error = str(e)
+            job_any: Any = job
+            job_any.status = "failed"
+            job_any.error = str(e)
             db.commit()
 
     finally:
@@ -296,68 +315,81 @@ async def run_translation_job(job_id: str, source_draft: dict):
 
 
 @router.post("/{job_id}/cancel")
-async def cancel_translation(job_id: str, db: Session = Depends(get_db)):
+async def cancel_translation(job_id: str, db: AsyncSession = Depends(get_db)):
     """取消翻译任务"""
-    job = db.query(TranslationJob).filter(TranslationJob.id == job_id).first()
+    result = await db.execute(select(TranslationJob).where(TranslationJob.id == job_id))
+    job = result.scalar_one_or_none()
 
     if not job:
         raise HTTPException(status_code=404, detail="翻译任务不存在")
 
-    if job.status not in ["pending", "running"]:
+    job_any: Any = job
+
+    if job_any.status not in ["pending", "running"]:
         raise HTTPException(status_code=400, detail="任务已完成或已取消")
 
-    job.status = "cancelled"
-    db.commit()
-    db.refresh(job)
+    job_any.status = "cancelled"
+    await db.flush()
+    await db.refresh(job_any)
 
-    return job.to_dict()
+    return job_any.to_dict()
 
 
 @router.delete("/{job_id}")
-async def delete_translation(job_id: str, db: Session = Depends(get_db)):
+async def delete_translation(job_id: str, db: AsyncSession = Depends(get_db)):
     """删除翻译任务"""
-    job = db.query(TranslationJob).filter(TranslationJob.id == job_id).first()
+    result = await db.execute(select(TranslationJob).where(TranslationJob.id == job_id))
+    job = result.scalar_one_or_none()
 
     if not job:
         raise HTTPException(status_code=404, detail="翻译任务不存在")
 
-    # 如果有结果草稿，也删除
-    if job.result_draft_id:
-        result_draft = db.query(BookDraft).filter(BookDraft.id == job.result_draft_id).first()
-        if result_draft:
-            db.delete(result_draft)
+    job_any: Any = job
 
-    db.delete(job)
-    db.commit()
+    # 如果有结果草稿，也删除
+    if job_any.result_draft_id:
+        draft_result = await db.execute(select(BookDraft).where(BookDraft.id == job_any.result_draft_id))
+        result_draft = draft_result.scalar_one_or_none()
+        if result_draft:
+            await db.delete(result_draft)
+
+    await db.delete(job_any)
+    await db.flush()
 
     return {"success": True, "message": "翻译任务已删除"}
 
 
 @router.post("/project/{project_id}/complete")
-async def complete_translations(project_id: str, db: Session = Depends(get_db)):
+async def complete_translations(project_id: str, db: AsyncSession = Depends(get_db)):
     """完成翻译阶段，进入生成阶段"""
-    project = db.query(Project).filter(Project.id == project_id).first()
+    project_result = await db.execute(select(Project).where(Project.id == project_id))
+    project = project_result.scalar_one_or_none()
 
     if not project:
         raise HTTPException(status_code=404, detail="项目不存在")
 
-    if project.current_stage != ProjectStage.TRANSLATE.value:
+    project_any: Any = project
+
+    if project_any.current_stage != ProjectStage.TRANSLATE.value:
         raise HTTPException(status_code=400, detail="项目不在翻译阶段")
 
     # 检查是否有完成的翻译
-    completed_jobs = db.query(TranslationJob).filter(
-        TranslationJob.project_id == project_id,
-        TranslationJob.status == "completed"
-    ).count()
+    completed_result = await db.execute(
+        select(TranslationJob).where(
+            TranslationJob.project_id == project_id,
+            TranslationJob.status == "completed"
+        )
+    )
+    completed_jobs = len(completed_result.scalars().all())
 
     # 更新项目阶段
-    project.current_stage = ProjectStage.GENERATE.value
-    project.updated_at = datetime.utcnow()
+    project_any.current_stage = ProjectStage.GENERATE.value
+    project_any.updated_at = datetime.utcnow()
 
-    db.commit()
+    await db.flush()
 
     return {
         "success": True,
         "message": f"翻译阶段完成，共 {completed_jobs} 个翻译版本",
-        "current_stage": project.current_stage
+        "current_stage": project_any.current_stage
     }

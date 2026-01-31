@@ -61,6 +61,21 @@ const parser = new DocumentParser()
 
 // Provider 管理器（延迟初始化）
 let providerManager: ProviderManager | null = null
+let providerConfigOverride: {
+  providers: Array<{
+    id: string
+    type: 'anthropic' | 'openai' | 'openai-compatible' | 'deepl' | 'google'
+    name: string
+    apiKey: string
+    baseUrl?: string
+    defaultModel?: string
+    models?: string[]
+    enabled: boolean
+    priority: number
+  }>
+  defaultProvider: string
+  fallbackChain: string[]
+} | null = null
 
 /**
  * 获取或创建 Provider 管理器
@@ -70,6 +85,17 @@ function getProviderManager(): ProviderManager {
     // 从环境变量读取配置
     const providers = []
 
+    if (providerConfigOverride) {
+      providerManager = createProviderManager({
+        providers: providerConfigOverride.providers,
+        defaultProvider: providerConfigOverride.defaultProvider,
+        fallbackChain: providerConfigOverride.fallbackChain,
+        retryAttempts: 3,
+        timeout: 60000,
+      })
+      return providerManager
+    }
+
     // Anthropic
     if (process.env.ANTHROPIC_API_KEY) {
       providers.push({
@@ -77,9 +103,10 @@ function getProviderManager(): ProviderManager {
         type: 'anthropic' as const,
         name: 'Anthropic Claude',
         apiKey: process.env.ANTHROPIC_API_KEY,
-        baseUrl: process.env.ANTHROPIC_BASE_URL,
+        baseUrl: process.env.ANTHROPIC_BASE_URL || '',
         defaultModel: process.env.ANTHROPIC_MODEL || 'claude-3-5-sonnet-20241022',
         enabled: true,
+        priority: 1,
       })
     }
 
@@ -90,9 +117,10 @@ function getProviderManager(): ProviderManager {
         type: 'openai' as const,
         name: 'OpenAI',
         apiKey: process.env.OPENAI_API_KEY,
-        baseUrl: process.env.OPENAI_BASE_URL,
+        baseUrl: process.env.OPENAI_BASE_URL || '',
         defaultModel: process.env.OPENAI_MODEL || 'gpt-4o',
         enabled: true,
+        priority: 2,
       })
     }
 
@@ -103,9 +131,10 @@ function getProviderManager(): ProviderManager {
         type: 'openai-compatible' as const,
         name: process.env.OPENAI_COMPATIBLE_NAME || 'OpenAI Compatible',
         apiKey: process.env.OPENAI_COMPATIBLE_API_KEY,
-        baseUrl: process.env.OPENAI_COMPATIBLE_BASE_URL,
+        baseUrl: process.env.OPENAI_COMPATIBLE_BASE_URL || '',
         defaultModel: process.env.OPENAI_COMPATIBLE_MODEL || 'deepseek-chat',
         enabled: true,
+        priority: 3,
       })
     }
 
@@ -116,8 +145,9 @@ function getProviderManager(): ProviderManager {
         type: 'deepl' as const,
         name: 'DeepL',
         apiKey: process.env.DEEPL_API_KEY,
-        baseUrl: process.env.DEEPL_FREE ? 'https://api-free.deepl.com' : undefined,
+        baseUrl: process.env.DEEPL_FREE ? 'https://api-free.deepl.com' : '',
         enabled: true,
+        priority: 4,
       })
     }
 
@@ -903,6 +933,163 @@ app.get('/providers/status', async (req, res) => {
     res.status(500).json({
       success: false,
       error: error instanceof Error ? error.message : '获取状态失败'
+    })
+  }
+})
+
+/**
+ * 更新 Provider 配置
+ * POST /config/providers
+ */
+app.post('/config/providers', async (req, res) => {
+  try {
+    const config = req.body || {}
+    const providers = Array.isArray(config.providers) ? config.providers : []
+
+    if (providers.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: '至少需要配置一个 Provider',
+      })
+    }
+
+    const normalizedProviders = providers.map((item) => ({
+      id: String(item.id || '').trim(),
+      type: item.type,
+      name: String(item.name || '').trim(),
+      apiKey: String(item.apiKey || '').trim(),
+      baseUrl: item.baseUrl ? String(item.baseUrl).trim() : '',
+      defaultModel: item.defaultModel ? String(item.defaultModel).trim() : undefined,
+      models: Array.isArray(item.models) ? item.models.map((m: unknown) => String(m)) : undefined,
+      enabled: Boolean(item.enabled),
+      priority: Number.isFinite(item.priority) ? Number(item.priority) : 1,
+    }))
+
+    const allowedTypes = ['anthropic', 'openai', 'openai-compatible', 'deepl', 'google']
+
+    for (const item of normalizedProviders) {
+      if (!item.id || !item.name || !item.type) {
+        return res.status(400).json({
+          success: false,
+          error: 'Provider 配置缺少必要字段',
+        })
+      }
+      if (!allowedTypes.includes(item.type)) {
+        return res.status(400).json({
+          success: false,
+          error: `不支持的 Provider 类型: ${item.type}`,
+        })
+      }
+      if (!item.apiKey && item.type !== 'deepl' && item.type !== 'openai-compatible') {
+        return res.status(400).json({
+          success: false,
+          error: `Provider ${item.id} 缺少 API Key`,
+        })
+      }
+      if (item.type === 'openai-compatible' && !item.baseUrl) {
+        return res.status(400).json({
+          success: false,
+          error: `Provider ${item.id} 需要配置 Base URL`,
+        })
+      }
+      if (item.type === 'google') {
+        return res.status(400).json({
+          success: false,
+          error: 'Google Provider 尚未实现',
+        })
+      }
+    }
+
+    const enabledProviders = normalizedProviders
+      .filter((item) => item.enabled)
+      .sort((a, b) => a.priority - b.priority)
+
+    if (enabledProviders.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: '至少需要启用一个 Provider',
+      })
+    }
+
+    providerConfigOverride = {
+      providers: enabledProviders,
+      defaultProvider: String(config.defaultProvider || enabledProviders[0].id),
+      fallbackChain: Array.isArray(config.fallbackChain)
+        ? config.fallbackChain.map((id: unknown) => String(id))
+        : enabledProviders.slice(1).map((item) => item.id),
+    }
+    providerManager = null
+
+    const statuses = await getProviderManager().getProviderStatuses()
+
+    return res.json({
+      success: true,
+      providers: statuses,
+    })
+  } catch (error) {
+    console.error('Provider config error:', error)
+    return res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : '更新配置失败',
+    })
+  }
+})
+
+/**
+ * 测试 Provider 连接
+ * POST /config/test
+ */
+app.post('/config/test', async (req, res) => {
+  try {
+    const config = req.body || {}
+    const provider = String(config.provider || '').trim()
+    const apiKey = String(config.apiKey || '').trim()
+    const baseUrl = config.baseUrl ? String(config.baseUrl).trim() : ''
+    const model = config.model ? String(config.model).trim() : undefined
+
+    if (!provider) {
+      return res.status(400).json({ success: false, error: '缺少 Provider 类型' })
+    }
+    if (!apiKey && provider !== 'deepl' && provider !== 'openai-compatible') {
+      return res.status(400).json({ success: false, error: '缺少 API Key' })
+    }
+    if (provider === 'openai-compatible' && !baseUrl) {
+      return res.status(400).json({ success: false, error: '缺少 Base URL' })
+    }
+    if (provider === 'google') {
+      return res.status(400).json({ success: false, error: 'Google Provider 尚未实现' })
+    }
+
+    const testManager = createProviderManager({
+      providers: [
+        {
+          id: provider,
+          type: provider as 'anthropic' | 'openai' | 'openai-compatible' | 'deepl',
+          name: provider,
+          apiKey,
+          baseUrl,
+          defaultModel: model,
+          enabled: true,
+          priority: 1,
+        },
+      ],
+      defaultProvider: provider,
+      fallbackChain: [],
+      retryAttempts: 1,
+      timeout: 30000,
+    })
+
+    const statuses = await testManager.getProviderStatuses()
+    const status = statuses[0]
+    return res.json({
+      success: true,
+      status,
+    })
+  } catch (error) {
+    console.error('Provider test error:', error)
+    return res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : '测试失败',
     })
   }
 })

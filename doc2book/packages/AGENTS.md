@@ -1,12 +1,12 @@
 # PACKAGES - TypeScript Processing Pipeline
 
-**Generated:** 2026-01-27
+**Generated:** 2026-01-31
 **Stack:** TypeScript, Node.js, Vitest, pnpm workspaces
 
 ## OVERVIEW
-TypeScript packages implementing document processing pipeline with AI integration and workspace dependencies.
+TypeScript packages implementing document processing pipeline with AI.
 
-## STRUCTURE
+## STRUCTURE integration and workspace dependencies
 ```
 packages/
 ├── shared/           # Common types and utilities
@@ -29,11 +29,19 @@ packages/
 |------|----------|-------|
 | Core Types | shared/src/ | Interfaces used across packages |
 | AI Integration | providers/src/ | Abstract + specific providers |
-| Document Parsing | parser/src/parsers/ | Format-specific logic |
+| Document Parsing | packages/parser/AGENTS.md | Format-specific logic |
+| Book Generation | packages/generator/AGENTS.md | EPUB/PDF + KDP |
 | Content Analysis | understanding/src/ | AI-powered understanding |
 | Book Creation | creator/src/ | Structure and outline generation |
 | Content Generation | generator/src/ | Final book output |
 | Testing | */src/*.test.ts | Vitest test suites |
+
+## PACKAGE AGENTS.md
+以下 packages 拥有独立的 AGENTS.md 文件：
+
+- `packages/parser/AGENTS.md` - 12 文件，6 种格式解析器
+- `packages/providers/AGENTS.md` - 8 文件，多 Provider 管理
+- `packages/generator/AGENTS.md` - 8 文件，EPUB/PDF 生成
 
 ## CONVENTIONS
 

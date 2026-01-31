@@ -242,7 +242,8 @@ ${JSON.stringify(chapterTitles, null, 2)}
   ]
 }
 
-只返回 JSON，不要其他内容。`
+只返回 JSON，不要其他内容。
+${options.instruction ? `\n附加要求：\n${options.instruction}` : ''}`
 
     const response = await this.providerManager.complete(
       [{ role: 'user', content: prompt }],

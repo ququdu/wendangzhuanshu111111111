@@ -29,4 +29,5 @@ export interface StyleOptions {
     tone?: 'formal' | 'informal' | 'academic' | 'conversational';
     audience?: 'general' | 'professional' | 'academic' | 'children';
     complexity?: 'simple' | 'moderate' | 'complex';
+    instruction?: string;
 }
